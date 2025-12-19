@@ -1,0 +1,74 @@
+import numpy as np
+from fractions import Fraction
+from math import gcd
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
+from qiskit.circuit.library import UnitaryGate
+from qiskit.primitives import StatevectorSampler
+
+def get_modular_exponentiation_gate(a, power, N, n_target):
+    dim = 2 ** n_target
+    matrix = np.zeros((dim, dim), dtype=complex)
+    
+    for i in range(dim):
+        if i < N and gcd(a, N) == 1:
+            val = pow(a, power, N)
+            target_idx = (i * val) % N
+            matrix[target_idx, i] = 1
+        else:
+            matrix[i, i] = 1
+            
+    gate = UnitaryGate(matrix, label=f"{a}^{power} mod {N}")
+    return gate.control(1)
+
+def build_inverse_qft(circuit, n):
+    for qubit in range(n // 2):
+        circuit.swap(qubit, n - qubit - 1)
+    for j in range(n):
+        for m in range(j):
+            circuit.cp(-np.pi / float(2**(j - m)), m, j)
+        circuit.h(j)
+
+def shors_algorithm_circuit(N, a, n_count, n_target):
+    qr_count = QuantumRegister(n_count, 'c')
+    qr_target = QuantumRegister(n_target, 't')
+    cr = ClassicalRegister(n_count, 'bits')
+    qc = QuantumCircuit(qr_count, qr_target, cr)
+
+    qc.h(qr_count)
+    qc.x(qr_target[0])
+
+    for q in range(n_count):
+        power = 2**q
+        controlled_gate = get_modular_exponentiation_gate(a, power, N, n_target)
+        qc.append(controlled_gate, [qr_count[q]] + list(qr_target))
+
+    build_inverse_qft(qc, n_count)
+    qc.measure(qr_count, cr)
+    return qc
+
+N = 15
+a = 7
+n_count = 8 
+n_target = 4 
+
+qc = shors_algorithm_circuit(N, a, n_count, n_target)
+
+sampler = StatevectorSampler()
+pub = (qc,)
+job = sampler.run([pub])
+result = job.result()[0]
+counts = result.data.bits.get_counts()
+
+measured_int = int(max(counts, key=counts.get), 2)
+phase = measured_int / (2**n_count)
+frac = Fraction(phase).limit_denominator(N)
+r = frac.denominator
+
+print(f"Measured Phase: {phase}")
+print(f"Estimated Period (r): {r}")
+
+if r % 2 == 0:
+    guesses = [gcd(int(a**(r/2)) - 1, N), gcd(int(a**(r/2)) + 1, N)]
+    print(f"Potential Factors of {N}: {guesses}")
+else:
+    print("Found odd period, run again.")
